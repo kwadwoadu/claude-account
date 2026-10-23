@@ -1,0 +1,401 @@
+#!/usr/bin/env bash
+# claude-account: keep several Claude Code subscription logins side by side and
+# switch the active one. Works with any number of accounts.
+#
+# Claude Code on Linux stores its login as one plaintext OAuth file that refreshes
+# its own token. There is no built-in multi-account support, so this tool keeps
+# named COPIES of that file ("slots") and swaps which copy is live.
+#
+# Slots:        ~/.claude-accounts/<Name>.json
+# Live login:   ~/.claude/.credentials.json
+# Active slot:  ~/.claude-accounts/active   (name of the slot that is live)
+# Backups:      ~/.claude-accounts/backups/ (the live login before each switch)
+#
+# Conversations are NOT in the credentials file. They live in
+# ~/.claude/projects/<cwd>/*.jsonl, so switching accounts leaves them in place.
+#
+# After any manual /login, run: claude-account save <Name>   so the slot matches.
+set -euo pipefail
+
+VERSION="1.0.0"
+
+DIR="${CLAUDE_ACCOUNTS_DIR:-$HOME/.claude-accounts}"
+LIVE="${CLAUDE_CREDENTIALS:-$HOME/.claude/.credentials.json}"
+CLAUDE_JSON="${CLAUDE_JSON:-$HOME/.claude.json}"
+ACTIVE_FILE="$DIR/active"
+CAPPED_DIR="$DIR/capped"
+PIN_FILE="$DIR/pinned"
+BACKUP_DIR="$DIR/backups"
+BACKUP_KEEP=10
+# How much of each subscription is left. One line per slot, pipe separated:
+#   <slot>|<5h percent>|<5h reset epoch>|<7d percent>|<7d reset epoch>|<fetched epoch>
+# Plain text, not JSON, so a statusline can read it on every render without
+# parsing JSON or touching the network.
+USAGE_CACHE="$DIR/usage.cache"
+USAGE_TTL=900      # 15 min: older than this and status/statusline say nothing
+USAGE_URL="https://api.anthropic.com/api/oauth/usage"
+
+umask 077
+if [[ ! -d $DIR ]]; then mkdir -p "$DIR"; chmod 700 "$DIR"; fi
+
+helptext() {
+  cat <<'EOF'
+claude-account - run several Claude Code subscription logins side by side.
+
+usage: claude-account <command> [args]
+
+commands:
+  status | list       show the active slot, saved slots, usage and cap marks
+  whoami | who        which slot and account the live login really is
+  save <Name>         store the current live login in a named slot (marks it active)
+  switch|use <Name>   make that slot the live login. The live token is first
+                      copied back to its own slot, and the live file is backed
+                      up. Running sessions pick up the new login before their
+                      next request, with no restart. A pin follows the switch.
+  next | swap         switch to the next slot in rotation
+  usage [--slot <Name>] [--quiet]
+                      how much of each subscription is left (5-hour and weekly
+                      windows), read per slot WITHOUT switching into it
+  pin                 hold the current account: auto-rotation scripts that read
+                      ~/.claude-accounts/pinned should not rotate
+  unpin               release the pin
+  --help  | -h        show this help
+  --version | -v      show version
+
+Slots live in ~/.claude-accounts (override: CLAUDE_ACCOUNTS_DIR); the live login
+is ~/.claude/.credentials.json (override: CLAUDE_CREDENTIALS). After any manual
+/login, run `claude-account save <Name>` so the slot matches the new login.
+EOF
+}
+usage() { helptext >&2; exit 1; }
+
+valid_name() { [[ $1 =~ ^[A-Za-z0-9_-]+$ && $1 != active && $1 != capped && $1 != backups ]]; }
+# The active file is plain text anyone with access to $DIR can edit, so its value
+# is checked like a slot name before it is used to build a path.
+active() {
+  local a; a=$(cat "$ACTIVE_FILE" 2>/dev/null || true)
+  if [[ -n $a ]] && valid_name "$a"; then echo "$a"; else echo "unknown"; fi
+}
+
+# Copy $1 over $2 in one step: a temp file in the same folder, mode 600, then mv.
+# A running Claude Code session reads the live file before each token use, so a
+# plain cp, which empties the file and then writes it, can hand it an empty login.
+put_file() {      # $1 = source  $2 = destination
+  local tmp; tmp=$(mktemp "$(dirname "$2")/.claude-account.XXXXXX")
+  cp "$1" "$tmp"; chmod 600 "$tmp"; mv -f "$tmp" "$2"
+}
+
+file_epoch() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1"; }
+fmt_epoch() {     # $1 = epoch  $2 = date format
+  date -d "@$1" "$2" 2>/dev/null || date -r "$1" "$2" 2>/dev/null || true
+}
+
+json_field() {    # $1 = file  $2 = key inside claudeAiOauth -> value, or empty
+  python3 - "$1" "$2" <<'EOF' 2>/dev/null || true
+import json,sys
+try:
+    v=json.load(open(sys.argv[1]))["claudeAiOauth"].get(sys.argv[2])
+    print(v if isinstance(v,str) else "")
+except Exception:
+    pass
+EOF
+}
+
+# A slot is a COPY of the Claude credentials file, which always carries a
+# "claudeAiOauth" object. Any OTHER .json in this folder (a stray backup, an
+# editor file) must never be treated as a slot: `next` would rotate into it and
+# `switch` would copy it over the live login, which logs you out.
+looks_like_credentials() { grep -q 'claudeAiOauth' "$1" 2>/dev/null; }
+slots() {
+  local f n
+  for f in "$DIR"/*.json; do
+    [[ -e $f ]] || continue
+    n=$(basename "$f" .json)
+    valid_name "$n" && looks_like_credentials "$f" && echo "$n"
+  done | sort
+}
+
+# The live file refreshes its own OAuth token, so before it is swapped out, it is
+# copied back into its slot, or the saved copy goes stale. A failed refresh can
+# blank the token; copying THAT back would destroy a good slot, so a live file
+# without both tokens is never copied back.
+sync_back() {
+  local cur; cur=$(active)
+  [[ -f $LIVE && $cur != unknown && -f $DIR/$cur.json ]] || return 0
+  if [[ -z $(json_field "$LIVE" accessToken) || -z $(json_field "$LIVE" refreshToken) ]]; then
+    echo "warning: the live login has an empty token; slot $cur keeps its saved copy" >&2
+    return 0
+  fi
+  put_file "$LIVE" "$DIR/$cur.json"
+}
+
+# Keep a copy of the live login before it is overwritten. This covers a login
+# that was never saved and a live login that drifted to another account after a
+# manual /login. Without it, `switch` would lose that login for good.
+backup_live() {
+  [[ -f $LIVE ]] || return 0
+  mkdir -p "$BACKUP_DIR"
+  put_file "$LIVE" "$BACKUP_DIR/live-$(date +%Y%m%d-%H%M%S)-$$.json"
+  local old
+  old=$(find "$BACKUP_DIR" -maxdepth 1 -name 'live-*.json' | sort | head -n -"$BACKUP_KEEP" 2>/dev/null || true)
+  [[ -z $old ]] || echo "$old" | while IFS= read -r f; do rm -f "$f"; done
+}
+
+# The endpoint that Claude Code itself calls (api/oauth/usage). It answers for the
+# account the bearer token belongs to, so every slot can be read WITHOUT switching
+# into it. The token goes in on stdin, never as an argument: arguments are visible
+# to every local user in the process list.
+# Tests set USAGE_FETCH_CMD; it gets the token on stdin and nothing reaches the network.
+fetch_usage() {   # stdin = access token -> response body on stdout
+  if [[ -n ${USAGE_FETCH_CMD:-} ]]; then "$USAGE_FETCH_CMD"; return $?; fi
+  local tok; IFS= read -r tok
+  printf 'Authorization: Bearer %s\n' "$tok" | curl -sS --max-time 15 \
+    -H @- \
+    -H "anthropic-beta: oauth-2025-04-20" \
+    -H "User-Agent: claude-account/$VERSION" \
+    "$USAGE_URL"
+}
+
+# An access token lives a few hours; a refresh token lives weeks. Only a Claude Code
+# session refreshes the pair, so a SAVED slot often carries an expired access token
+# and the endpoint answers 401 for it. The live login has the fresh token, so the
+# active slot is read from there. This tool never refreshes a token itself: that
+# rotates the refresh token and logs out any other machine that uses the same copy.
+token_of() {      # $1 = slot name -> access token, or empty
+  local src="$DIR/$1.json"
+  [[ $1 == "$(active)" && -f $LIVE ]] && src="$LIVE"
+  json_field "$src" accessToken
+}
+
+# Response file -> "<5h pct>|<5h reset epoch>|<7d pct>|<7d reset epoch>", or empty on
+# anything unexpected. utilization is a percent USED, so remaining is 100 minus it.
+# The body comes in as a FILE PATH: the heredoc already owns stdin.
+parse_usage() {   # $1 = file holding the response body
+  python3 - "$1" <<'EOF' 2>/dev/null || true
+import json,sys,datetime
+def ep(v):
+    if not v: return ""
+    try: return str(int(datetime.datetime.fromisoformat(v).timestamp()))
+    except Exception: return ""
+try:
+    d=json.load(open(sys.argv[1]))
+    a=d.get("five_hour") or {}
+    b=d.get("seven_day") or {}
+    u1,u2=a.get("utilization"),b.get("utilization")
+    if u1 is None and u2 is None: sys.exit(1)
+    print("%s|%s|%s|%s" % (
+        "" if u1 is None else int(round(u1)), ep(a.get("resets_at")),
+        "" if u2 is None else int(round(u2)), ep(b.get("resets_at"))))
+except Exception:
+    sys.exit(1)
+EOF
+}
+
+cache_put() {     # $1=slot  $2="p5|r5|p7|r7"
+  local tmp; tmp=$(mktemp "$DIR/.usage.XXXXXX")
+  [[ ! -f $USAGE_CACHE ]] || awk -F'|' -v s="$1" '$1 != s' "$USAGE_CACHE" > "$tmp"
+  printf '%s|%s|%s\n' "$1" "$2" "$(date +%s)" >> "$tmp"
+  chmod 600 "$tmp"; mv -f "$tmp" "$USAGE_CACHE"
+}
+
+cache_line() {    # $1=slot -> cached fields if fresh, else empty
+  [[ -f $USAGE_CACHE ]] || return 0
+  local line fetched
+  line=$(awk -F'|' -v s="$1" '$1 == s' "$USAGE_CACHE" 2>/dev/null | tail -1)
+  [[ -n $line ]] || return 0
+  fetched=${line##*|}
+  [[ $fetched =~ ^[0-9]+$ ]] || return 0
+  (( $(date +%s) - fetched < USAGE_TTL )) || return 0
+  printf '%s' "$line"
+}
+
+# "5h 8% left · 7d 67% left (5h resets 16:39)" from a cache line, or empty.
+# The reset time is in the local time zone (set TZ to change it).
+render_usage() {  # $1 = cache line
+  local IFS='|'; read -r _ p5 r5 p7 _ _ <<< "$1"
+  local out=""
+  [[ -n ${p5:-} ]] && out="5h $((100 - p5))% left"
+  [[ -n ${p7:-} ]] && out="${out:+$out · }7d $((100 - p7))% left"
+  [[ -z ${r5:-} ]] || out="$out (5h resets $(fmt_epoch "$r5" '+%H:%M'))"
+  printf '%s' "$out"
+}
+
+# The account email of a slot, stored next to it at save time. Claude Code's own
+# profile (~/.claude.json) names the account of the last /login and does not change
+# on a switch, so it cannot tell which account a slot is.
+email_of() { cat "$DIR/$1.email" 2>/dev/null || true; }
+profile_email() {
+  grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$CLAUDE_JSON" 2>/dev/null \
+    | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//' || true
+}
+
+cmd=${1:-}
+case "$cmd" in
+  -h|--help|help) helptext; exit 0 ;;
+  -v|--version|version) echo "claude-account $VERSION"; exit 0 ;;
+  usage)
+    want=""; quiet=0
+    shift || true
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --slot) [[ -n ${2:-} ]] || { echo "usage: claude-account usage [--slot <Name>] [--quiet]" >&2; exit 1; }
+                want=$2; shift 2 ;;
+        --quiet) quiet=1; shift ;;
+        *) echo "usage: claude-account usage [--slot <Name>] [--quiet]" >&2; exit 1 ;;
+      esac
+    done
+    rc_any=1
+    while IFS= read -r s; do
+      [[ -n $s ]] || continue
+      [[ -n $want && $s != "$want" ]] && continue
+      tok=$(token_of "$s")
+      if [[ -z $tok ]]; then
+        [[ $quiet -eq 1 ]] || echo "slot $s: no token in the slot file"
+        continue
+      fi
+      bodyfile=$(mktemp "$DIR/.body.XXXXXX")
+      # || true: under set -e, a curl that cannot reach the network would otherwise
+      # end the whole command with no line printed and nothing in the cache.
+      printf '%s\n' "$tok" | fetch_usage > "$bodyfile" 2>/dev/null || true
+      fields=$(parse_usage "$bodyfile")
+      rm -f "$bodyfile"
+      if [[ -z $fields ]]; then
+        # A stale access token answers 401 here. That is NOT proof the login is
+        # dead: the refresh happens inside a Claude Code session, not in this call.
+        if [[ $s == "$(active)" ]]; then
+          [[ $quiet -eq 1 ]] || echo "slot $s: no reading (the endpoint refused the live login; check the network, or run claude auth status)"
+        else
+          [[ $quiet -eq 1 ]] || echo "slot $s: no reading (its saved token is too old; only a session renews one)"
+        fi
+        continue
+      fi
+      cache_put "$s" "$fields"
+      rc_any=0
+      if [[ $quiet -eq 0 ]]; then
+        line="slot $s: $(render_usage "$s|$fields|$(date +%s)")"
+        [[ $s == "$(active)" ]] && line+="  [active]"
+        echo "$line"
+      fi
+    done < <(slots)
+    exit $rc_any
+    ;;
+  status|list)
+    echo "active slot: $(active)"
+    if [[ -f $PIN_FILE ]]; then
+      echo "pinned: $(cat "$PIN_FILE")  (run 'claude-account unpin' to release)"
+    fi
+    found=0
+    while IFS= read -r s; do
+      [[ -n $s ]] || continue
+      found=1
+      e=$(email_of "$s")
+      line="slot $s${e:+ <$e>}: saved $(fmt_epoch "$(file_epoch "$DIR/$s.json")" '+%Y-%m-%d %H:%M')"
+      [[ $s == "$(active)" ]] && line+="  [active]"
+      [[ -f $PIN_FILE && $s == "$(cat "$PIN_FILE")" ]] && line+="  [pinned]"
+      if [[ -f $CAPPED_DIR/$s ]]; then
+        mins=$(( ( $(date +%s) - $(file_epoch "$CAPPED_DIR/$s") ) / 60 ))
+        line+="  [capped ${mins}m ago]"
+      fi
+      cl=$(cache_line "$s")
+      [[ -n $cl ]] && line+="  $(render_usage "$cl")"
+      echo "$line"
+    done < <(slots)
+    [[ $found -eq 1 ]] || echo "no slots saved yet"
+    ;;
+  whoami|who)
+    fp() {  # $1=credentials file -> short token fingerprint, or EMPTY
+      local t; t=$(json_field "$1" accessToken)
+      [[ -n $t ]] || { echo "EMPTY"; return 0; }
+      if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$t" | sha256sum | cut -c1-12
+      else
+        printf '%s' "$t" | shasum -a 256 | cut -c1-12
+      fi
+    }
+    [[ -f $LIVE ]] || { echo "no live login at $LIVE (run /login inside claude first)" >&2; exit 1; }
+    livefp=$(fp "$LIVE")
+    match=""
+    while IFS= read -r s; do
+      [[ -n $s ]] || continue
+      [[ $(fp "$DIR/$s.json") == "$livefp" ]] && match="$s"
+    done < <(slots)
+    cur=$(active)
+    echo "live login:"
+    if [[ -n $match ]]; then
+      echo "  slot    : $match"
+      echo "  account : $(email_of "$match")"
+    elif [[ $cur != unknown ]]; then
+      # Claude Code refreshed the token since the last switch or save, so the
+      # fingerprint no longer matches; the active slot is still the live one.
+      echo "  slot    : $cur (token refreshed since the last save)"
+      echo "  account : $(email_of "$cur")"
+    else
+      echo "  slot    : (unsaved)  -- name it with: claude-account save <Name>"
+      echo "  account : $(profile_email) (from the last /login)"
+    fi
+    echo "  token   : $livefp (sha256 prefix, not the token)"
+    if [[ $livefp == EMPTY ]]; then
+      echo "WARNING: the live accessToken is EMPTY. A failed refresh blanks it; log in again."
+    fi
+    if [[ -n $match && $match != "$cur" ]]; then
+      echo "WARNING: active says '$cur' but the live login is '$match'. Run: claude-account save $match"
+    fi
+    # Claude Code prefers an API key over the subscription login, so any of these
+    # being set means the login above is NOT what gets billed.
+    shadow=""
+    for v in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL; do
+      [[ -n ${!v:-} ]] && shadow="$shadow $v"
+    done
+    if [[ -n $shadow ]]; then
+      echo "WARNING: these are set in this shell and OVERRIDE the login above:$shadow"
+    fi
+    ;;
+  save)
+    slot=${2:-}; [[ -n $slot ]] || usage
+    valid_name "$slot" || { echo "invalid slot name (letters, digits, - and _ only)" >&2; exit 1; }
+    [[ -f $LIVE ]] || { echo "no live credentials at $LIVE (run /login inside claude first)" >&2; exit 1; }
+    looks_like_credentials "$LIVE" || { echo "$LIVE does not look like a Claude login (no claudeAiOauth); refusing to save it" >&2; exit 1; }
+    put_file "$LIVE" "$DIR/$slot.json"
+    e=$(profile_email); [[ -z $e ]] || printf '%s\n' "$e" > "$DIR/$slot.email"
+    echo "$slot" > "$ACTIVE_FILE"
+    echo "saved the live login${e:+ ($e)} as slot $slot (now active)"
+    ;;
+  switch|use)
+    slot=${2:-}; [[ -n $slot ]] || usage
+    valid_name "$slot" || { echo "invalid slot name (letters, digits, - and _ only)" >&2; exit 1; }
+    [[ -f $DIR/$slot.json ]] || { echo "slot $slot is empty; log in to that account, then: claude-account save $slot" >&2; exit 1; }
+    looks_like_credentials "$DIR/$slot.json" || { echo "slot $slot does not contain a Claude login (no claudeAiOauth); refusing to make it live" >&2; exit 1; }
+    sync_back
+    backup_live
+    mkdir -p "$(dirname "$LIVE")"
+    put_file "$DIR/$slot.json" "$LIVE"
+    echo "$slot" > "$ACTIVE_FILE"
+    # A pin follows a deliberate switch, so it never points at the old account.
+    [[ -f $PIN_FILE ]] && echo "$slot" > "$PIN_FILE"
+    e=$(email_of "$slot")
+    echo "switched to slot $slot${e:+ ($e)}"
+    # Claude Code 2.x checks the live login file's date before each token use and
+    # reloads it when the date changed. Running sessions follow with no restart.
+    echo "running sessions move to $slot before their next request"
+    ;;
+  pin)
+    cur=$(active)
+    [[ $cur != unknown ]] || { echo "no active slot to pin; use: claude-account switch <Name>" >&2; exit 1; }
+    echo "$cur" > "$PIN_FILE"
+    echo "pinned $cur. release with: claude-account unpin"
+    ;;
+  unpin)
+    if [[ -f $PIN_FILE ]]; then rm -f "$PIN_FILE"; echo "unpinned"; else echo "was not pinned"; fi
+    ;;
+  next|swap)
+    cur=$(active)
+    all=()
+    while IFS= read -r s; do [[ -n $s ]] && all+=("$s"); done < <(slots)
+    [[ ${#all[@]} -ge 2 ]] || { echo "next needs 2 or more slots (found ${#all[@]}); use: claude-account switch <Name>" >&2; exit 1; }
+    idx=-1
+    for i in "${!all[@]}"; do [[ ${all[$i]} == "$cur" ]] && idx=$i; done
+    if [[ $idx -lt 0 ]]; then target=${all[0]}; else target=${all[$(( (idx + 1) % ${#all[@]} ))]}; fi
+    exec "$0" switch "$target"
+    ;;
+  *) usage ;;
+esac
