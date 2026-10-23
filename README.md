@@ -23,7 +23,7 @@ Claude Code keeps one login per machine. When one subscription hits its 5-hour o
 - **Save** each login as a named slot: `work`, `personal`, `team`, as many as you like.
 - **Switch** to a slot, or rotate to the **next** one, in a second.
 - **Read how much is left** on every subscription (5-hour and weekly windows) without switching into it.
-- **Check who you are**: which slot and account is live, and whether an `ANTHROPIC_API_KEY` in your shell silently overrides the login.
+- **Check who you are**: which slot is live, and whether an `ANTHROPIC_API_KEY` in your shell silently overrides the login.
 - **Never lose a login**: the live token is copied back to its slot before a switch, a blank token from a failed refresh is never saved over a good slot, and the live login is backed up before it is replaced.
 
 Conversations are not tied to the login. They stay in `~/.claude/projects/`, so switching accounts leaves every conversation in place.
@@ -53,14 +53,14 @@ claude-account save personal
 claude-account usage            # how much is left on each, read without switching
 claude-account switch work      # make work the live login
 claude-account next             # rotate to the next slot
-claude-account status           # slots, emails, the active one, cached usage
+claude-account status           # slots, the active one, cached usage
 claude-account whoami           # which login is really live, and any API key override
 ```
 
 | Command | What it does |
 |---|---|
-| `status` / `list` | Active slot, saved slots with their emails, cached usage, cap marks |
-| `whoami` / `who` | Which slot and account is live; warns on drift, a blank token, or an `ANTHROPIC_*` override |
+| `status` / `list` | Active slot, saved slots, cached usage, cap marks |
+| `whoami` / `who` | Which slot is live, and the email of the last `/login`; warns on drift, a blank token, or an `ANTHROPIC_*` override |
 | `save <Name>` | Store the live login as a slot, and mark it active |
 | `switch <Name>` / `use` | Make that slot the live login |
 | `next` / `swap` | Switch to the next slot in alphabetical order |

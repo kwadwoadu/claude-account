@@ -174,8 +174,9 @@ else
 fi
 
 # 14 ------------------------------------------------------------------------
-# whoami must name the account of the slot that is live, not the account of the
-# last /login (Claude Code's profile file does not change on a switch).
+# whoami must never tie the profile email to a slot. Claude Code's profile file names
+# the account of the last /login and does not change on a switch, so after
+# "save Alpha (a@), save Beta (b@), switch Alpha" the profile still says b@.
 printf '%s' '{"oauthAccount":{"emailAddress":"a@example.com"}}' > "$CLAUDE_JSON"
 printf '%s' "$TOKA" > "$TMP/live.json"; "$BIN" save Alpha >/dev/null
 printf '%s' '{"oauthAccount":{"emailAddress":"b@example.com"}}' > "$CLAUDE_JSON"
@@ -183,16 +184,17 @@ printf '%s' "$TOKB" > "$TMP/live.json"; "$BIN" save Beta >/dev/null
 "$BIN" switch Alpha >/dev/null
 who="$("$BIN" whoami 2>&1)"
 case "$who" in
-  *"account : a@example.com"*) ok "whoami names the switched-to account" ;;
-  *) bad "whoami named the wrong account after a switch: $who" ;;
+  *"slot    : Alpha"*"b@example.com (from the last /login"*) ok "whoami names the live slot and labels the profile email" ;;
+  *) bad "whoami tied an email to the slot or lost the slot after a switch: $who" ;;
 esac
-# After Claude Code refreshes the token, the fingerprint no longer matches any
-# slot, but the active slot is still the live one.
+# A token refresh and a new /login look the same on disk, so a fingerprint that
+# matches no slot must not be reported as the active slot.
 printf '%s' '{"claudeAiOauth":{"accessToken":"tokA2","refreshToken":"r2"}}' > "$TMP/live.json"
 who="$("$BIN" whoami 2>&1)"
 case "$who" in
-  *"slot    : Alpha (token refreshed"*) ok "whoami follows the active slot after a token refresh" ;;
-  *) bad "whoami lost the slot after a refresh: $who" ;;
+  *"slot    : Alpha"*) bad "whoami guessed the active slot for an unmatched token: $who" ;;
+  *"no slot matches"*) ok "whoami does not guess a slot for an unmatched token" ;;
+  *) bad "whoami gave no slot line for an unmatched token: $who" ;;
 esac
 
 # 15 ------------------------------------------------------------------------
