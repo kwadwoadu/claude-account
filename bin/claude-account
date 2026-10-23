@@ -220,10 +220,9 @@ render_usage() {  # $1 = cache line
   printf '%s' "$out"
 }
 
-# The account email of a slot, stored next to it at save time. Claude Code's own
-# profile (~/.claude.json) names the account of the last /login and does not change
-# on a switch, so it cannot tell which account a slot is.
-email_of() { cat "$DIR/$1.email" 2>/dev/null || true; }
+# Claude Code's profile (~/.claude.json) names the account of the last /login. It does
+# not change on a switch, and nothing on disk tells a token refresh from a new /login,
+# so this email is never tied to a slot; it is shown only with that label.
 profile_email() {
   grep -o '"emailAddress"[[:space:]]*:[[:space:]]*"[^"]*"' "$CLAUDE_JSON" 2>/dev/null \
     | head -1 | sed 's/.*:[[:space:]]*"//; s/"$//' || true
@@ -288,8 +287,7 @@ case "$cmd" in
     while IFS= read -r s; do
       [[ -n $s ]] || continue
       found=1
-      e=$(email_of "$s")
-      line="slot $s${e:+ <$e>}: saved $(fmt_epoch "$(file_epoch "$DIR/$s.json")" '+%Y-%m-%d %H:%M')"
+      line="slot $s: saved $(fmt_epoch "$(file_epoch "$DIR/$s.json")" '+%Y-%m-%d %H:%M')"
       [[ $s == "$(active)" ]] && line+="  [active]"
       [[ -f $PIN_FILE && $s == "$(cat "$PIN_FILE")" ]] && line+="  [pinned]"
       if [[ -f $CAPPED_DIR/$s ]]; then
@@ -323,16 +321,13 @@ case "$cmd" in
     echo "live login:"
     if [[ -n $match ]]; then
       echo "  slot    : $match"
-      echo "  account : $(email_of "$match")"
-    elif [[ $cur != unknown ]]; then
-      # Claude Code refreshed the token since the last switch or save, so the
-      # fingerprint no longer matches; the active slot is still the live one.
-      echo "  slot    : $cur (token refreshed since the last save)"
-      echo "  account : $(email_of "$cur")"
     else
-      echo "  slot    : (unsaved)  -- name it with: claude-account save <Name>"
-      echo "  account : $(profile_email) (from the last /login)"
+      # A refresh by Claude Code and a new /login look the same here, so this never
+      # guesses which account it is.
+      echo "  slot    : (no slot matches: the token was refreshed, or this is a new /login)"
+      echo "            if you logged in again, name it with: claude-account save <Name>"
     fi
+    echo "  account : $(profile_email) (from the last /login, not changed by a switch)"
     echo "  token   : $livefp (sha256 prefix, not the token)"
     if [[ $livefp == EMPTY ]]; then
       echo "WARNING: the live accessToken is EMPTY. A failed refresh blanks it; log in again."
@@ -356,9 +351,8 @@ case "$cmd" in
     [[ -f $LIVE ]] || { echo "no live credentials at $LIVE (run /login inside claude first)" >&2; exit 1; }
     looks_like_credentials "$LIVE" || { echo "$LIVE does not look like a Claude login (no claudeAiOauth); refusing to save it" >&2; exit 1; }
     put_file "$LIVE" "$DIR/$slot.json"
-    e=$(profile_email); [[ -z $e ]] || printf '%s\n' "$e" > "$DIR/$slot.email"
     echo "$slot" > "$ACTIVE_FILE"
-    echo "saved the live login${e:+ ($e)} as slot $slot (now active)"
+    echo "saved the live login as slot $slot (now active)"
     ;;
   switch|use)
     slot=${2:-}; [[ -n $slot ]] || usage
@@ -372,8 +366,7 @@ case "$cmd" in
     echo "$slot" > "$ACTIVE_FILE"
     # A pin follows a deliberate switch, so it never points at the old account.
     [[ -f $PIN_FILE ]] && echo "$slot" > "$PIN_FILE"
-    e=$(email_of "$slot")
-    echo "switched to slot $slot${e:+ ($e)}"
+    echo "switched to slot $slot"
     # Claude Code 2.x checks the live login file's date before each token use and
     # reloads it when the date changed. Running sessions follow with no restart.
     echo "running sessions move to $slot before their next request"
