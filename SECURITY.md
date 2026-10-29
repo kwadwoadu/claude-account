@@ -15,6 +15,9 @@ It needs `bash`, `python3` and `curl`.
   shows in the process list. Nothing is sent anywhere else.
 - It never refreshes a token itself. A refresh rotates the refresh token and logs
   out any other machine that uses the same copy.
+- The account-picker mod sends nothing itself. It runs the CLI in its own `bin/`
+  folder, reads `~/.claude-accounts/active`, and keeps one empty folder per alerted
+  window under `~/.claude/state/account-picker-alerted/`.
 
 ## Reporting a vulnerability
 Please report security issues privately via GitHub's

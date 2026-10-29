@@ -1,0 +1,7 @@
+{
+  "name": "account-picker",
+  "version": "1.0.0",
+  "description": "Shows every saved Claude Code login's 5-hour and weekly room on /accounts, toasts when the live account passes 90 percent of a window, and switches the live login with one press",
+  "author": { "name": "Kwadwo Adu" },
+  "types": "./types/index.d.ts"
+}
