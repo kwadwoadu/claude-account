@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Installs claude-account into ~/.local/bin (override: PREFIX=/usr/local).
+# Installs claude-account into ~/.local/bin (override: PREFIX=/usr/local), for use
+# in a terminal. The account-picker mod does not need it: it runs its own copy.
 # Run from a clone: ./install.sh
 set -euo pipefail
 

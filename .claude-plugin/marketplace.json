@@ -1,0 +1,6 @@
+{
+  "name": "claude-account",
+  "description": "The account-picker mod: pick another saved Claude Code login from inside Claude Code",
+  "owner": { "name": "Kwadwo Adu" },
+  "plugins": [{ "name": "account-picker", "source": "./" }]
+}

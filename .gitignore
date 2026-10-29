@@ -1,2 +1,4 @@
 .DS_Store
 *.swp
+# Claude Code writes the API's type declarations here each time it loads the mod.
+.claude-plugin/types/

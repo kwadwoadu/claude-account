@@ -4,8 +4,8 @@ IFS= read -r tok   # the token arrives on stdin
 now=$(date +%s)
 iso() { date -u -d "@$1" '+%Y-%m-%dT%H:%M:%S+00:00' 2>/dev/null || date -u -r "$1" '+%Y-%m-%dT%H:%M:%S+00:00'; }
 case "$tok" in
-  demo-work)     p5=92; p7=71 ;;
-  demo-personal) p5=12; p7=34 ;;
+  demo-work)     p5=96; p7=71 ;;
+  demo-personal) p5=20; p7=34 ;;
   *) exit 1 ;;
 esac
 printf '{"five_hour":{"utilization":%s,"resets_at":"%s"},"seven_day":{"utilization":%s,"resets_at":"%s"}}\n' \

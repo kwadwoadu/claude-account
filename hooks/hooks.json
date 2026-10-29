@@ -1,0 +1,4 @@
+{
+  "description": "The account-picker hooks module",
+  "modules": ["./register.tsx"]
+}
