@@ -156,16 +156,18 @@ const switchTo = async ($: EngineInterface, name: string) => {
       })
       .catch(() => null)
     const isOk = ran?.exitCode === 0
-    // claude-account's own lines say what happens to running sessions.
+    // On success one short line, so the pane does not scroll; a failure keeps
+    // claude-account's own words.
     const said = (text: string) => text.trim().split('\n').join(' ')
     const note =
       ran === null
         ? `Switch to ${name} did not finish in ${SWITCH_TIMEOUT_MS / 1000} s. Check with: claude-account status`
         : isOk
-          ? said(ran.stdout) || `Live login is now ${name}.`
+          ? `Live login is now ${name}. Running sessions follow on their next request.`
           : `Switch to ${name} failed: ${said(ran.stderr) || `exit code ${ran.exitCode}`}`
 
-    $.ui.toast(note)
+    // A toast is narrow: the outcome alone there, the pane keeps the full line.
+    $.ui.toast(isOk ? `Live login is now ${name}.` : note)
     await refresh($, note, isOk ? name : undefined)
   } finally {
     switching = null
