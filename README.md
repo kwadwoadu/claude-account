@@ -140,7 +140,7 @@ claude plugin validate --strict .   # the plugin manifest, the marketplace file 
 claude plugin test .                # the mod, against Claude Code's own test kit
 ```
 
-CI runs the CLI tests and shellcheck on every pull request. The two `claude plugin` checks run locally for now.
+CI runs all of them on every pull request: the CLI tests and shellcheck in `ci.yml`, the two `claude plugin` checks on Claude Code 2.1.312 in `plugin.yml`.
 
 The demo GIF is made with [VHS](https://github.com/charmbracelet/vhs) from `demo/mod-demo.tape`, in a real Claude Code session with fake logins and a stub usage endpoint (`vhs demo/mod-demo.tape`).
 
