@@ -55,7 +55,7 @@ Linux only, with `bash`, `python3` and `curl`.
 - **`/accounts`** opens a pane with every saved login: how much of the 5-hour and weekly window is left, when each resets, and which one is live now.
 - **Best pick.** The pane marks the account with the most weekly room, then the most 5-hour room, and puts the focus on its Switch button. Press Enter to switch. An account with 5 percent or less left, no reading, or a recent cap mark is never the best pick.
 - **The toast.** When the live account passes 90 percent of its 5-hour or weekly window, a toast says so and points to `/accounts`. Each window alerts once on the machine, however many sessions run.
-- **Switch.** The pane runs `claude-account switch <Name>`, then shows what it said. One switch runs at a time. Running sessions pick up the new login before their next request, with no restart.
+- **Switch.** The pane runs `claude-account switch <Name>`. On success a toast and one line in the pane say which login is live. On a failure the pane shows the CLI's own words. One switch runs at a time. Running sessions pick up the new login before their next request, with no restart.
 
 Conversations are not tied to the login. They stay in `~/.claude/projects/`, so switching leaves every conversation in place.
 

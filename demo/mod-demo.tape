@@ -9,7 +9,7 @@ Output assets/demo.gif
 Set Shell "bash"
 Set FontSize 18
 Set Width 1200
-Set Height 880
+Set Height 820
 Set Padding 20
 Set TypingSpeed 60ms
 Set Theme "Dracula"
@@ -17,7 +17,7 @@ Set Theme "Dracula"
 Hide
 Type "source demo/mod-setup.sh && clear"
 Enter
-Type `claude --plugin-dir "$REPO"`
+Type `claude --plugin-dir "$REPO" --permission-mode default`
 Enter
 Sleep 8s
 Show
@@ -32,5 +32,5 @@ Sleep 4s
 Enter
 Sleep 5s
 
-Escape
-Sleep 2s
+# Hold on the pane after the switch, so the loop never ends on a blank screen.
+Sleep 3s

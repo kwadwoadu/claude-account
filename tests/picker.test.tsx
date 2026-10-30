@@ -265,6 +265,10 @@ test('a low live window toasts once and never opens the picker, and a press swit
   expect(s.envs[0]).toEqual({ CLAUDE_ACCOUNT_LOCK_WAIT: '20', CLAUDE_ACCOUNT_CALLER: 'account-picker' })
   // After a switch only the account that changed is read again.
   expect(s.runs[1]).toEqual(['usage', '--slot', 'personal', '--quiet'])
+  // The toast is narrow, so it says only the outcome.
+  expect(s.toasts.at(-1)).toBe('Live login is now personal.')
+  // The pane's note is one line, so the pane does not scroll after a switch.
+  expect((await ui.find({ type: 'Text', text: /Live login is now/ }))?.text).toBe('Live login is now personal. Running sessions follow on their next request.')
   await ui.unmount()
 })
 

@@ -10,6 +10,10 @@ export USAGE_FETCH_CMD="$REPO/demo/fake-usage"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 DISABLE_AUTOUPDATER=1 TZ=UTC
 unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_ACCOUNTS_DIR \
   CLAUDE_CREDENTIALS CLAUDE_JSON CLAUDE_ACCOUNT_BIN CLAUDE_CODE_PLUGIN_DIRS CLAUDE_CONFIG_DIR
+# A session that runs this inside Claude Code passes on its own CLAUDE_CODE_*
+# markers, which show as warnings in the demo. Clear them all.
+while read -r v; do unset "$v"; done < <(compgen -e | grep -E '^(CLAUDE_CODE_|CLAUDECODE)')
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 mkdir -p "$HOME/.claude" "$HOME/project"
 
 # Stands in for "/login inside Claude Code": a clearly fake login for <name>,
@@ -20,7 +24,7 @@ fake_login() {
   chmod 600 "$HOME/.claude/.credentials.json"
   # Onboarding done and the demo folder trusted, so Claude Code opens straight
   # on its prompt.
-  printf '{"hasCompletedOnboarding":true,"lastReleaseNotesSeen":"9.9.9","hasSeenAutoModeEntryWarning":true,"hasResetAutoModeOptInForDefaultOffer":true,"theme":"dark","oauthAccount":{"emailAddress":"%s@example.com","organizationName":"Demo"},"projects":{"%s":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' \
+  printf '{"hasCompletedOnboarding":true,"lastReleaseNotesSeen":"9.9.9","hasSeenAutoModeEntryWarning":true,"hasResetAutoModeOptInForDefaultOffer":true,"seenNotifications":{"auto-mode-default":9},"tipsHistory":{"auto-mode-default":9},"theme":"dark","oauthAccount":{"emailAddress":"%s@example.com","organizationName":"Demo"},"projects":{"%s":{"hasTrustDialogAccepted":true,"hasCompletedProjectOnboarding":true}}}' \
     "$1" "$HOME/project" > "$HOME/.claude.json"
 }
 fake_login personal && bash "$REPO/bin/claude-account" save personal >/dev/null
