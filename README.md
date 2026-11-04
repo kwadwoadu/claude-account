@@ -126,6 +126,7 @@ See [SECURITY.md](SECURITY.md) to report a problem.
 
 ## Limitations
 
+- **Your own accounts only.** claude-account is for people who hold more than one Claude subscription themselves. Use only logins that are yours, and follow [Anthropic's terms](https://www.anthropic.com/legal/consumer-terms). Do not share a slot with another person.
 - **Linux only for now.** On macOS, Claude Code keeps its login in the Keychain, not in a file. On another system, `/accounts` says so in one line and offers no switch.
 - **Mods are early access in Claude Code.** Function-hook plugins first came in Claude Code 2.1.287. This mod is tested on 2.1.312. The plugin API may change between releases.
 - `usage` relies on an endpoint Claude Code uses internally. It is not a public API and may change.
