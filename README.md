@@ -1,7 +1,5 @@
 # claude-account
 
-[![CI](https://github.com/kwadwoadu/claude-account/actions/workflows/ci.yml/badge.svg)](https://github.com/kwadwoadu/claude-account/actions/workflows/ci.yml)
-
 **Pick another Claude Code account from inside Claude Code.** Type `/accounts` to see the 5-hour and weekly room of every saved login. A toast tells you when the live account passes 90 percent of a window. One press switches the login, and running sessions follow.
 
 ![The /accounts pane in Claude Code: two saved logins with their 5-hour and weekly room, the best pick marked, and one press switching to it](assets/demo.gif)
